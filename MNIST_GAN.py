@@ -9,6 +9,20 @@ mnist = input_data.read_data_sets('MNIST_data',one_hot=True)
 print(mnist)
 
 
+
+def variable_summaries(var):
+  """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
+  with tf.name_scope('summaries'):
+    mean = tf.reduce_mean(var)
+    tf.summary.scalar('mean', mean)
+    with tf.name_scope('stddev'):
+      stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
+    tf.summary.scalar('stddev', stddev)
+    tf.summary.scalar('max', tf.reduce_max(var))
+    tf.summary.scalar('min', tf.reduce_min(var))
+    tf.summary.histogram('histogram', var)
+
+
 def fc_layer(x, out_size, activation_function=lambda x: x):
     params = {'W': None, 'b': None}
     shape = x.get_shape().as_list()
@@ -16,8 +30,11 @@ def fc_layer(x, out_size, activation_function=lambda x: x):
     input_is_vector = len(shape) == 2
     last_dim = shape[-1] if input_is_vector else np.prod(shape[1:])
 
-    initializer_W = tf.random_normal_initializer(stddev=tf.cast(tf.sqrt(1./(out_size*last_dim)), tf.float32))
-    params['W'] = tf.get_variable("W", [last_dim, out_size], initializer=initializer_W)
+    params['W'] = tf.get_variable(
+        "W",
+        [last_dim, out_size],
+        initializer=tf.random_normal_initializer(stddev=tf.cast(tf.sqrt(1./(out_size*last_dim)), tf.float32))
+    )
 
     initializer_b = tf.constant_initializer(0.0)
     params['b'] = tf.get_variable("b", [out_size], initializer=initializer_b)
@@ -25,6 +42,30 @@ def fc_layer(x, out_size, activation_function=lambda x: x):
     out = tf.matmul(x, params['W']) if input_is_vector else tf.matmul(tf.reshape(x, (-1, last_dim)), params['W']) + params['b']
 
     return activation_function(out), params
+
+
+def conv_layer(x, out_size, k_size=3, stride=1, activation_function=lambda x: x):
+    params = {'W': None, 'b': None}
+    shape = x.get_shape().as_list()
+
+    params['W'] = tf.get_variable(
+        'W',
+        [k_size, k_size, shape[-1], out_size],
+        initializer=tf.contrib.layers.xavier_initializer_conv2d(uniform=True, seed=None, dtype=tf.float32)
+    )
+
+    params['b'] = tf.get_variable(
+        'b',
+        initializer=tf.zeros([shape[-1], out_size])
+    )
+
+    out = tf.nn.conv2d(x,params['W'], (1, stride,stride, 1), padding='SAME') + params['b']
+
+    variable_summaries(params['W'])
+    #variable_summaries(params['b'])
+
+    return activation_function(out), params
+
 
 
 def generator(z):
@@ -38,12 +79,15 @@ def generator(z):
     for key_fc, key_prob in zip(params_fc, params_prob):
         gen_vars += [params_fc[key_fc], params_prob[key_prob]]
 
-    return gen_prob, gen_vars
+    return tf.reshape(gen_prob, [-1, 28, 28, 1]), gen_vars
 
 
 def discriminator(z):
+    with tf.variable_scope("conv1"):
+        disc_conv1, params_conv1 = conv_layer(z, 32, activation_function=tf.nn.relu)
+
     with tf.variable_scope("fc1"):
-        disc_fc, params_fc = fc_layer(z, 128, tf.nn.relu)
+        disc_fc, params_fc = fc_layer(disc_conv1, 128, tf.nn.relu)
 
     with tf.variable_scope("fc2"):
         disc_logit, params_prob = fc_layer(disc_fc, 1)
@@ -73,7 +117,7 @@ def plot_batch(batch):
             grid[r*img_width:r*img_width + img_width,c*img_height:c*img_height + img_height] = batch[r*num_rows + c]
 
     plt.imshow(grid,interpolation='None', cmap='gray')
-    plt.pause(1e-5)
+    plt.pause(1e-2)
 
 
 with tf.variable_scope('G'):
@@ -82,7 +126,7 @@ with tf.variable_scope('G'):
 
 
 with tf.variable_scope('D') as scope:
-    X = tf.placeholder(tf.float32, shape=[None, 28 * 28], name='X')
+    X = tf.placeholder(tf.float32, shape=[None, 28, 28, 1], name='X')
 
     D_real, D_logit_real, D_vars = discriminator(X)
     scope.reuse_variables()
@@ -92,25 +136,44 @@ with tf.variable_scope('D') as scope:
 D_loss = -tf.reduce_mean(tf.log(D_real) + tf.log(1. - D_fake)) #TODO: somethigg
 G_loss =  - tf.reduce_mean(tf.log(D_fake))
 
+tf.summary.scalar('G_loss',G_loss)
+#tf.summary.scalar('D_loss', D_loss)
 
-D_solver = tf.train.AdamOptimizer().minimize(D_loss, var_list=D_vars)
+merged = tf.summary.merge_all()
+
+
+
+D_solver = tf.train.AdamOptimizer(learning_rate=1e-5).minimize(D_loss, var_list=D_vars)
 G_solver =  tf.train.AdamOptimizer().minimize(G_loss, var_list=G_vars)
 
 
 mb_size = 64
 Z_dim = 100
 with tf.Session() as sess:
-    init = tf.initialize_all_variables()
+    train_writer = tf.summary.FileWriter('./train',sess.graph)
+    test_writer = tf.summary.FileWriter('./test')
+
+    init = tf.global_variables_initializer()
+
+
     sess.run(init)
-    for it in range(1000000):
+    for it in range(1001):
         print('%s'%str(it))
         X_mb, _  = mnist.train.next_batch(mb_size)
+        X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-        _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X:X_mb , Z: sample_Z(mb_size, Z_dim)})
-        _, G_loss_curr = sess.run([G_solver, G_loss], feed_dict={Z:sample_Z(mb_size, Z_dim)})
+        summary_D,_, D_loss_curr = sess.run([merged,D_solver, D_loss], feed_dict={X:X_mb , Z: sample_Z(mb_size, Z_dim)})
+        summary_G,_, G_loss_curr = sess.run([merged,G_solver, G_loss], feed_dict={Z:sample_Z(mb_size, Z_dim)})
 
-        if it % 5000 == 0:
+        #train_writer.add_summary(summary_D, it)
+        #train_writer.add_summary(summary_G, it)
+        if it % 500 == 0:
             img = sess.run([G_sample], feed_dict={X:X_mb, Z: sample_Z(mb_size, Z_dim)})
             print(img)
             img = img[0].reshape([-1, 28, 28])
             plot_batch(img)
+
+            #test_writer.add_summary(summary_D, it)
+            #test_writer.add_summary(summary_G, it)
+
+    plt.show()
