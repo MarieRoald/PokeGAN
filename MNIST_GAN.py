@@ -108,7 +108,7 @@ def plot_batch(batch):
     N,img_width,img_height = batch.shape
 
     num_cols = int(np.sqrt(N))
-    num_rows = N/num_cols
+    num_rows = int(N/num_cols)
 
     grid = np.zeros([img_height*num_rows,img_width*num_cols])
 
@@ -137,7 +137,7 @@ D_loss = -tf.reduce_mean(tf.log(D_real) + tf.log(1. - D_fake)) #TODO: somethigg
 G_loss =  - tf.reduce_mean(tf.log(D_fake))
 
 tf.summary.scalar('G_loss',G_loss)
-#tf.summary.scalar('D_loss', D_loss)
+tf.summary.scalar('D_loss', D_loss)
 
 merged = tf.summary.merge_all()
 
@@ -149,24 +149,30 @@ G_solver =  tf.train.AdamOptimizer().minimize(G_loss, var_list=G_vars)
 
 mb_size = 64
 Z_dim = 100
-with tf.Session() as sess:
+
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+
+
+with tf.Session(config=config) as sess:
     train_writer = tf.summary.FileWriter('./train',sess.graph)
     test_writer = tf.summary.FileWriter('./test')
 
     init = tf.global_variables_initializer()
 
-
+    print("hello")
     sess.run(init)
-    for it in range(1001):
+    for it in range(80001):
         print('%s'%str(it))
         X_mb, _  = mnist.train.next_batch(mb_size)
         X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-        summary_D,_, D_loss_curr = sess.run([merged,D_solver, D_loss], feed_dict={X:X_mb , Z: sample_Z(mb_size, Z_dim)})
-        summary_G,_, G_loss_curr = sess.run([merged,G_solver, G_loss], feed_dict={Z:sample_Z(mb_size, Z_dim)})
+        _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X:X_mb , Z: sample_Z(mb_size, Z_dim)})
+        summary_G,_, G_loss_curr = sess.run([merged,G_solver, G_loss], feed_dict={X:X_mb,Z:sample_Z(mb_size, Z_dim)})
 
         #train_writer.add_summary(summary_D, it)
-        #train_writer.add_summary(summary_G, it)
+        train_writer.add_summary(summary_G, it)
+        train_writer.flush()
         if it % 500 == 0:
             img = sess.run([G_sample], feed_dict={X:X_mb, Z: sample_Z(mb_size, Z_dim)})
             print(img)
@@ -174,6 +180,16 @@ with tf.Session() as sess:
             plot_batch(img)
 
             #test_writer.add_summary(summary_D, it)
-            #test_writer.add_summary(summary_G, it)
+
+
+            X_mb, _ = mnist.test.next_batch(mb_size)
+            X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
+
+            _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim)})
+            summary_G, _, G_loss_curr = sess.run([merged, G_solver, G_loss],
+                                                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim)})
+
+            test_writer.add_summary(summary_G, it)
+            test_writer.flush()
 
     plt.show()
