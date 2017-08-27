@@ -3,11 +3,16 @@ from tensorflow.examples.tutorials.mnist import input_data
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+import os
 
 
 mnist = input_data.read_data_sets('MNIST_data',one_hot=True)
 print(mnist)
 
+LOAD_OLD = True
+
+LoGdIr = "tensorboard_logs"
+LOAD_DIR = LoGdIr
 
 
 def variable_summaries(var):
@@ -154,15 +159,40 @@ config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 
 
+def load_model_from_file(load_dir,sess):
+    step = 1
+    if tf.gfile.Exists(load_dir):
+        restorer = tf.train.Saver(tf.global_variables())
+        ckpt = tf.train.get_checkpoint_state(load_dir)
+        abs_ckpt_path = os.path.abspath(ckpt.model_checkpoint_path)
+        restorer.restore(sess, abs_ckpt_path)
+
+        step_str = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
+        print('Succesfully loaded model from %s at step = %s.' % (ckpt.model_checkpoint_path, step_str))
+
+        step = int(step_str) + 1
+    else:
+        print('Could not load model from %s' %load_dir )
+    return step
+
+
+
+
 with tf.Session(config=config) as sess:
-    train_writer = tf.summary.FileWriter('./train',sess.graph)
-    test_writer = tf.summary.FileWriter('./test')
+    model_file_name = os.path.join(LoGdIr, "model")
+    saver = tf.train.Saver(tf.global_variables(), max_to_keep=10, keep_checkpoint_every_n_hours=2)
+
+
+    train_writer = tf.summary.FileWriter('%s/train' % LoGdIr,sess.graph)
+    test_writer = tf.summary.FileWriter('%s/test' % LoGdIr)
 
     init = tf.global_variables_initializer()
 
-    print("hello")
     sess.run(init)
-    for it in range(80001):
+
+    step = load_model_from_file(LOAD_DIR, sess) if LOAD_OLD else 1
+
+    for it in range(step,80001):
         print('%s'%str(it))
         X_mb, _  = mnist.train.next_batch(mb_size)
         X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
@@ -192,4 +222,5 @@ with tf.Session(config=config) as sess:
             test_writer.add_summary(summary_G, it)
             test_writer.flush()
 
+            saver.save(sess, model_file_name, it)
     plt.show()
