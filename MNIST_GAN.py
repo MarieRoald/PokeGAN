@@ -9,9 +9,9 @@ import os
 mnist = input_data.read_data_sets('MNIST_data',one_hot=True)
 print(mnist)
 
-LOAD_OLD = True
+LOAD_OLD = False
 
-LoGdIr = "tensorboard_logs"
+LoGdIr = "noe_bullshit"
 LOAD_DIR = LoGdIr
 
 
@@ -28,52 +28,131 @@ def variable_summaries(var):
     tf.summary.histogram('histogram', var)
 
 
-def fc_layer(x, out_size, activation_function=lambda x: x):
-    params = {'W': None, 'b': None}
-    shape = x.get_shape().as_list()
+def fc_layer(x, out_size, activation_function=lambda x: x, name=None):
+    with tf.name_scope(name):
+        params = {'W': None, 'b': None}
+        shape = x.get_shape().as_list()
 
-    input_is_vector = len(shape) == 2
-    last_dim = shape[-1] if input_is_vector else np.prod(shape[1:])
+        input_is_vector = len(shape) == 2
+        last_dim = shape[-1] if input_is_vector else np.prod(shape[1:])
 
-    params['W'] = tf.get_variable(
-        "W",
-        [last_dim, out_size],
-        initializer=tf.random_normal_initializer(stddev=tf.cast(tf.sqrt(1./(out_size*last_dim)), tf.float32))
-    )
+        params['W'] = tf.get_variable(
+            "W",
+            [last_dim, out_size],
+            initializer=tf.random_normal_initializer(stddev=tf.cast(tf.sqrt(1./(out_size*last_dim)), tf.float32))
+        )
 
-    initializer_b = tf.constant_initializer(0.0)
-    params['b'] = tf.get_variable("b", [out_size], initializer=initializer_b)
+        initializer_b = tf.constant_initializer(0.0)
+        params['b'] = tf.get_variable("b", [out_size], initializer=initializer_b)
 
-    out = tf.matmul(x, params['W']) if input_is_vector else tf.matmul(tf.reshape(x, (-1, last_dim)), params['W']) + params['b']
+        out = tf.matmul(x, params['W']) if input_is_vector else tf.matmul(tf.reshape(x, (-1, last_dim)), params['W']) + params['b']
 
-    return activation_function(out), params
+        return activation_function(out), params
 
 
-def conv_layer(x, out_size, k_size=3, stride=1, activation_function=lambda x: x):
-    params = {'W': None, 'b': None}
-    shape = x.get_shape().as_list()
+def conv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size=3, stride=1):
+    with tf.name_scope(name):
+        params = {'W': None, 'b': None}
+        shape = x.get_shape().as_list()
 
-    params['W'] = tf.get_variable(
-        'W',
-        [k_size, k_size, shape[-1], out_size],
-        initializer=tf.contrib.layers.xavier_initializer_conv2d(uniform=True, seed=None, dtype=tf.float32)
-    )
+        params['W'] = tf.get_variable(
+            'W',
+            [k_size, k_size, shape[-1], out_size],
+            initializer=tf.contrib.layers.xavier_initializer_conv2d(uniform=True, seed=None, dtype=tf.float32)
+        )
 
-    params['b'] = tf.get_variable(
-        'b',
-        initializer=tf.zeros([shape[-1], out_size])
-    )
+        params['b'] = tf.get_variable(
+            'b',
+            initializer=tf.zeros([shape[-1], out_size])
+        )
 
-    out = tf.nn.conv2d(x,params['W'], (1, stride,stride, 1), padding='SAME') + params['b']
+        out = tf.nn.conv2d(x,params['W'], (1, stride,stride, 1), padding='SAME') + params['b']
 
-    variable_summaries(params['W'])
-    #variable_summaries(params['b'])
+        variable_summaries(params['W'])
+        #variable_summaries(params['b'])
 
-    return activation_function(out), params
+        return activation_function(out), params
 
+
+def create_nn(in_var, layers, is_training, name=None):
+    """A function that creates a custom neural network.
+
+    Parameters:
+    -----------
+    in_var : tf.Variable
+        The input variable of the network,
+    layers : list
+        A list of dictionaries describing the shape of each layer. The keys of these dictionaries should be:
+            `layer`: A function that creates nodes for each layer. This function should have the keyword arguments
+                     `x` - the input variable to this layer.
+                     `out_size` - the no. of channels out of this layer.
+                     `activation_function` - the activation function to use.
+                     `name` - The name of this layer.
+            `out_size`: The no. of channels out of the corresponding layer.
+            `activation_function`: The activation function the corresponding layer should use, e.g. tf.nn.relu.
+            `name`: The name- and variable scope of the corresponding layer.
+            `use_batchnorm`: Boolean, whether or not to use batchnorm after this layer.
+            `kwargs`: Other keyword arguments for the layer function as a dictionary. If this key is nonexistent it is
+                      to None.
+    is_training : tf.Placeholder
+        This should be true when the network is training and false otherwise.
+    name : str
+        The name scope of the network
+
+    Returns:
+    --------
+    out : tf.Variable
+        The output variable of the network.
+    params : The weights used in this network
+    """
+    out = in_var
+    params = {}
+    with tf.name_scope(name):
+        for layer in layers:
+            layer['kwargs'] = {} if 'kwargs' not in layer else layer['kwargs']
+            assert 'out_size' in layer
+            assert 'activation_function' in layer
+            assert 'name' in layer
+            assert 'use_batchnorm' in layer
+
+            with tf.variable_scope(layer['name']):
+                out, curr_params = layer['layer'](
+                    x=out,
+                    out_size=layer['out_size'],
+                    activation_function=layer['activation_function'],
+                    name=layer['name'],
+                    **layer['kwargs']
+                )
+
+                out = tf.layers.batch_normalization(out, training=is_training) if layer['use_batchnorm'] else out
+
+            for key, val in curr_params.items():
+                params['{}/{}'.format(layer['name'], key)] = val
+
+    return out, params
+
+
+def layer_dict(layer_func, out_size, activation_function, name, use_batchnorm, kwargs=None):
+    kwargs = {} if kwargs is None else kwargs
+    return {
+        'layer': layer_func,
+        'out_size': out_size,
+        'activation_function': activation_function,
+        'name': name,
+        'use_batchnorm': use_batchnorm,
+        'kwargs': kwargs
+    }
 
 
 def generator(z):
+    layers = [
+        layer_dict(layer_func=fc_layer, out_size=128, activation_function=tf.nn.relu, name='fc1', use_batchnorm=False),
+        layer_dict(layer_func=fc_layer, out_size=28*28, activation_function=tf.nn.sigmoid, name='fc2', use_batchnorm=False)
+    ]
+    out, params = create_nn(z, layers, is_training=True, name='Generator')
+    print(tf.reshape(out, [-1, 28, 28, 1]), params)
+    return tf.reshape(out, [-1, 28, 28, 1]), params
+    """
     with tf.variable_scope("fc1"):
         gen_fc, params_fc = fc_layer(z, 128, tf.nn.relu)
 
@@ -85,6 +164,7 @@ def generator(z):
         gen_vars += [params_fc[key_fc], params_prob[key_prob]]
 
     return tf.reshape(gen_prob, [-1, 28, 28, 1]), gen_vars
+    """
 
 
 def discriminator(z):
@@ -192,7 +272,7 @@ with tf.Session(config=config) as sess:
 
     step = load_model_from_file(LOAD_DIR, sess) if LOAD_OLD else 1
 
-    for it in range(step,80001):
+    for it in range(step,10001):
         print('%s'%str(it))
         X_mb, _  = mnist.train.next_batch(mb_size)
         X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
