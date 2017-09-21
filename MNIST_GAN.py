@@ -72,7 +72,7 @@ def generator(z, is_training):
             out_size=1,
             activation_function=tf.nn.sigmoid,
             name='conv3',
-            use_batchnorm=True
+            use_batchnorm=False
         )
     ]
     out, params = nntools.create_nn(z, layers, is_training=is_training, name='Generator')
@@ -83,7 +83,7 @@ def discriminator(z, is_training, reuse_vars=None):
     layers = [
         layer_dict(
             layer_func=nntools.conv_layer,
-            out_size=32,
+            out_size=16,
             activation_function=nntools.leaky_relu,
             name='conv1',
             use_batchnorm=True
@@ -93,14 +93,23 @@ def discriminator(z, is_training, reuse_vars=None):
             out_size=32,
             activation_function=nntools.leaky_relu,
             name='conv2',
-            use_batchnorm=False
+            use_batchnorm=True,
+            kwargs={'stride': 2}
+        ),
+        layer_dict(
+            layer_func=nntools.conv_layer,
+            out_size=64,
+            activation_function=nntools.leaky_relu,
+            name='conv3',
+            use_batchnorm=True,
+            kwargs={'stride': 2}
         ),
         layer_dict(
             layer_func=nntools.fc_layer,
             out_size=128,
             activation_function=nntools.leaky_relu,
             name='fc1',
-            use_batchnorm=False
+            use_batchnorm=True
         ),
         layer_dict(
             layer_func=nntools.fc_layer,
@@ -135,16 +144,11 @@ def plot_batch(batch):
 
 
 is_training = tf.placeholder(tf.bool)
-
-
 with tf.variable_scope('G'):
     Z = tf.placeholder(tf.float32, shape=[None, 100], name='Z')
     G_sample, G_vars = generator(Z, is_training=is_training)
-
-
 with tf.variable_scope('D') as scope:
     X = tf.placeholder(tf.float32, shape=[None, 28, 28, 1], name='X')
-
 
     D_real, D_vars = discriminator(X, reuse_vars=None, is_training=is_training)
     D_fake, D_fake_vars = discriminator(G_sample, reuse_vars=True, is_training=is_training)
@@ -161,10 +165,10 @@ merged = tf.summary.merge_all()
 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 with tf.control_dependencies(update_ops):
     D_solver = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(D_loss, var_list=D_vars)
-    G_solver = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(G_loss, var_list=G_vars)
+    G_solver = tf.train.AdamOptimizer(learning_rate=5e-4).minimize(G_loss, var_list=G_vars)
 
 
-mb_size = 64
+mb_size = 128
 Z_dim = 100
 
 config = tf.ConfigProto()
@@ -208,11 +212,10 @@ with tf.Session(config=config) as sess:
         X_mb, _ = mnist.train.next_batch(mb_size)
         X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-        if it % 5 == 0:
-            _, D_loss_curr = sess.run(
-                [D_solver, D_loss],
-                feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
-            )
+        _, D_loss_curr = sess.run(
+            [D_solver, D_loss],
+            feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
+        )
 
         summary_G, _, G_loss_curr = sess.run(
             [merged, G_solver, G_loss],
@@ -222,7 +225,7 @@ with tf.Session(config=config) as sess:
             # train_writer.add_summary(summary_D, it)
             train_writer.add_summary(summary_G, it)
             train_writer.flush()
-        if it % 230 == 0:
+        if it % 250 == 0:
             img = sess.run(
                 [G_sample],
                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: False}
