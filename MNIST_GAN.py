@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import os
+import nntools
 
 
 mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
@@ -11,144 +12,8 @@ print(mnist)
 
 LOAD_OLD = False
 
-LoGdIr = "tensorboard/five_bn"
+LoGdIr = "tensorboard/large_net"
 LOAD_DIR = LoGdIr
-
-
-def variable_summaries(var):
-    """Attach a lot of summaries to a Tensor (for TensorBoard visualization).
-    """
-    return
-    with tf.name_scope('Summaries'):
-        mean = tf.reduce_mean(var)
-        tf.summary.scalar('Mean', mean)
-        with tf.name_scope('Stddev'):
-            stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-        tf.summary.scalar('Stddev', stddev)
-        tf.summary.scalar('Max', tf.reduce_max(var))
-        tf.summary.scalar('Min', tf.reduce_min(var))
-        tf.summary.histogram('Histogram', var)
-
-
-def fc_layer(x, out_size, activation_function=lambda x: x, name=None):
-    with tf.name_scope(name):
-        params = {'W': None, 'b': None}
-        shape = x.get_shape().as_list()
-
-        input_is_vector = len(shape) == 2
-        last_dim = shape[-1] if input_is_vector else np.prod(shape[1:])
-
-        params['W'] = tf.get_variable(
-            "W",
-            [last_dim, out_size],
-            initializer=tf.glorot_normal_initializer()
-        )
-
-        params['b'] = tf.get_variable(
-            "b",
-            [out_size],
-            initializer=tf.zeros_initializer()
-        )
-
-        x = x if input_is_vector else tf.reshape(x, (-1, last_dim))
-        out = tf.matmul(x, params['W']) + params['b']
-
-        return activation_function(out), params
-
-
-def conv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size=3, stride=1):
-    with tf.name_scope(name):
-        params = {'W': None, 'b': None}
-        shape = x.get_shape().as_list()
-
-        params['W'] = tf.get_variable(
-            'W',
-            [k_size, k_size, shape[-1], out_size],
-            initializer=tf.contrib.layers.xavier_initializer_conv2d()
-        )
-
-        params['b'] = tf.get_variable(
-            'b',
-            initializer=tf.zeros([out_size]) # TODO: FIX STUFF
-        )
-
-        out = params['b'] + tf.nn.conv2d(
-            input=x,
-            filter=params['W'],
-            strides=(1, stride, stride, 1),
-            padding='SAME'
-        )
-
-        variable_summaries(params['W'])
-        # variable_summaries(params['b'])
-
-        return activation_function(out), params
-
-
-def reshape(x, out_size, **kwargs):
-    return tf.reshape(x, out_size), {}
-
-
-def create_nn(in_var, layers, is_training, reuse_vars=None, name=None):
-    """A function that creates a custom neural network.
-
-    Parameters:
-    -----------
-    in_var : tf.Variable
-        The input variable of the network,
-    layers : list
-        A list of dictionaries describing the shape of each layer.
-        The keys of these dictionaries should be:
-            `layer`: A function that creates nodes for each layer. This
-                     function should have the keyword arguments
-                     `x` - the input variable to this layer.
-                     `out_size` - the no. of channels out of this layer.
-                     `name` - The name of this layer.
-                     Optionally, the function can take other arguments,
-                     passed as **kwargs
-            `out_size`: The no. of channels out of the corresponding layer.
-            `activation_function`: The activation function the corresponding
-            layer should use, e.g. tf.nn.relu, if this is None it is not
-            passed.
-            `name`: The name- and variable scope of the corresponding layer.
-            `use_batchnorm`: Boolean, whether or not to use batchnorm after
-            this layer.
-            `kwargs`: Other keyword arguments for the layer function as a
-            dictionary (optional).
-    is_training : tf.Placeholder
-        This should be true when the network is training and false otherwise.
-    name : str
-        The name scope of the network
-
-    Returns:
-    --------
-    out : tf.Variable
-        The output variable of the network.
-    params : The weights used in this network
-    """
-    out = in_var
-    params = {}
-    with tf.name_scope(name):
-        for layer in layers:
-            layer['kwargs'] = {} if 'kwargs' not in layer else layer['kwargs']
-            assert 'name' in layer
-            assert 'use_batchnorm' in layer
-            if 'activation_function' in layer:
-                layer['kwargs']['activation_function'] = layer['activation_function']
-
-            with tf.variable_scope(layer['name'], reuse=reuse_vars) as var_scope:
-                out, curr_params = layer['layer'](
-                    x=out,
-                    **layer['kwargs']
-                )
-
-                if layer['use_batchnorm']:
-                    out = tf.contrib.layers.batch_norm(out, is_training=is_training)
-
-            for key, val in curr_params.items():
-                params['{}/{}'.format(layer['name'], key)] = val
-
-    return out, params
 
 
 def layer_dict(layer_func, out_size, activation_function, name, use_batchnorm, kwargs=None):
@@ -169,67 +34,88 @@ def layer_dict(layer_func, out_size, activation_function, name, use_batchnorm, k
 def generator(z, is_training):
     layers = [
         layer_dict(
-            layer_func=fc_layer,
+            layer_func=nntools.fc_layer,
             out_size=128,
-            activation_function=tf.nn.relu,
+            activation_function=nntools.leaky_relu,
             name='fc1',
             use_batchnorm=True
         ),
         layer_dict(
-            layer_func=fc_layer,
+            layer_func=nntools.fc_layer,
             out_size=28*28*16,
-            activation_function=tf.nn.relu,
+            activation_function=nntools.leaky_relu,
             name='fc2',
             use_batchnorm=True
         ),
         {
-            'layer': reshape,
+            'layer': nntools.reshape,
             'kwargs': {'out_size': [-1, 28, 28, 16]},
             'use_batchnorm': None,
             'name': 'Reshape'
         },
         layer_dict(
-            layer_func=conv_layer,
+            layer_func=nntools.conv_layer,
+            out_size=16,
+            activation_function=nntools.leaky_relu,
+            name='conv1',
+            use_batchnorm=True
+        ),
+        layer_dict(
+            layer_func=nntools.conv_layer,
+            out_size=32,
+            activation_function=nntools.leaky_relu,
+            name='conv2',
+            use_batchnorm=True
+        ),
+        layer_dict(
+            layer_func=nntools.conv_layer,
             out_size=1,
             activation_function=tf.nn.sigmoid,
-            name='conv1',
+            name='conv3',
             use_batchnorm=True
         )
     ]
-    out, params = create_nn(z, layers, is_training=is_training, name='Generator')
+    out, params = nntools.create_nn(z, layers, is_training=is_training, name='Generator')
     return tf.reshape(out, [-1, 28, 28, 1]), params
 
 
 def discriminator(z, is_training, reuse_vars=None):
     layers = [
         layer_dict(
-            layer_func=conv_layer,
+            layer_func=nntools.conv_layer,
             out_size=32,
-            activation_function=tf.nn.relu,
+            activation_function=nntools.leaky_relu,
             name='conv1',
             use_batchnorm=True
         ),
         layer_dict(
-            layer_func=fc_layer,
-            out_size=128,
-            activation_function=tf.nn.relu,
-            name='fc1',
-            use_batchnorm=True
+            layer_func=nntools.conv_layer,
+            out_size=32,
+            activation_function=nntools.leaky_relu,
+            name='conv2',
+            use_batchnorm=False
         ),
         layer_dict(
-            layer_func=fc_layer,
+            layer_func=nntools.fc_layer,
+            out_size=128,
+            activation_function=nntools.leaky_relu,
+            name='fc1',
+            use_batchnorm=False
+        ),
+        layer_dict(
+            layer_func=nntools.fc_layer,
             out_size=1,
             activation_function=tf.nn.sigmoid,
             name='fc2',
             use_batchnorm=False
         )
     ]
-    out, params = create_nn(z, layers, is_training=is_training, name='Discriminator', reuse_vars=reuse_vars)
+    out, params = nntools.create_nn(z, layers, is_training=is_training, name='Discriminator', reuse_vars=reuse_vars)
     return out, params
 
 
 def sample_Z(m, n):
-    return np.random.uniform(-1., 1., size=[m, n])
+    return np.random.randn(m, n)
 
 
 def plot_batch(batch):
@@ -274,8 +160,8 @@ merged = tf.summary.merge_all()
 
 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 with tf.control_dependencies(update_ops):
-    D_solver = tf.train.AdamOptimizer(learning_rate=1e-5).minimize(D_loss, var_list=D_vars)
-    G_solver = tf.train.AdamOptimizer().minimize(G_loss, var_list=G_vars)
+    D_solver = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(D_loss, var_list=D_vars)
+    G_solver = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(G_loss, var_list=G_vars)
 
 
 mb_size = 64
@@ -316,25 +202,27 @@ with tf.Session(config=config) as sess:
     step = load_model_from_file(LOAD_DIR, sess) if LOAD_OLD else 1
     # TODO: PRINT SOMETHING WITH AcCuRAZY
 
-    for it in range(step, 20001):
-        print('%s' % str(it))
+    for it in range(step, 100001):
+        if it % 5 == 0:
+            print('%s' % str(it))
         X_mb, _ = mnist.train.next_batch(mb_size)
         X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-        _, D_loss_curr = sess.run(
-            [D_solver, D_loss],
-            feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
-        )
+        if it % 5 == 0:
+            _, D_loss_curr = sess.run(
+                [D_solver, D_loss],
+                feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
+            )
 
         summary_G, _, G_loss_curr = sess.run(
             [merged, G_solver, G_loss],
             feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
         )
-        if it % 50 == 0:
+        if it % 100 == 0:
             # train_writer.add_summary(summary_D, it)
             train_writer.add_summary(summary_G, it)
             train_writer.flush()
-        if it % 500 == 0:
+        if it % 230 == 0:
             img = sess.run(
                 [G_sample],
                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: False}
@@ -342,15 +230,22 @@ with tf.Session(config=config) as sess:
             print(img)
             img = img[0].reshape([-1, 28, 28])
             plot_batch(img)
+            if it % 1000 == 0:
+                plt.savefig(LoGdIr + '/images/{}.png'.format(it))
 
             # test_writer.add_summary(summary_D, it)
 
             X_mb, _ = mnist.test.next_batch(mb_size)
             X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-            _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True})
-            summary_G, _, G_loss_curr = sess.run([merged, G_solver, G_loss],
-                                                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True})
+            _, D_loss_curr = sess.run(
+                [D_solver, D_loss],
+                feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
+            )
+            summary_G, _, G_loss_curr = sess.run(
+                [merged, G_solver, G_loss],
+                feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
+            )
 
             test_writer.add_summary(summary_G, it)
             test_writer.flush()
