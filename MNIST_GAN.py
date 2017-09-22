@@ -12,7 +12,7 @@ print(mnist)
 
 LOAD_OLD = False
 
-LoGdIr = "tensorboard/large_net"
+LoGdIr = "tensorboard/large_net7"
 LOAD_DIR = LoGdIr
 
 
@@ -94,13 +94,21 @@ def discriminator(z, is_training, reuse_vars=None):
             activation_function=nntools.leaky_relu,
             name='conv2',
             use_batchnorm=True,
-            kwargs={'stride': 2}
+            kwargs={'stride': 1}
         ),
         layer_dict(
             layer_func=nntools.conv_layer,
             out_size=64,
             activation_function=nntools.leaky_relu,
             name='conv3',
+            use_batchnorm=True,
+            kwargs={'stride': 2}
+        ),
+        layer_dict(
+            layer_func=nntools.conv_layer,
+            out_size=64,
+            activation_function=nntools.leaky_relu,
+            name='conv4',
             use_batchnorm=True,
             kwargs={'stride': 2}
         ),
@@ -154,6 +162,15 @@ with tf.variable_scope('D') as scope:
     D_fake, D_fake_vars = discriminator(G_sample, reuse_vars=True, is_training=is_training)
 
 
+tf.summary.scalar('D_real',tf.reduce_mean(D_real))
+tf.summary.scalar('D_fake',tf.reduce_mean(D_fake))
+
+fake_acc = tf.reduce_mean(tf.cast(tf.less(D_fake,0.5),tf.float32))
+real_acc = tf.reduce_mean(tf.cast(tf.less(-D_real,-0.5),tf.float32))
+
+tf.summary.scalar('fake acc',fake_acc)
+tf.summary.scalar('real acc',real_acc)
+
 D_loss = -tf.reduce_mean(tf.log(D_real) + tf.log(1. - D_fake))  # TODO: somethigg
 G_loss = -tf.reduce_mean(tf.log(D_fake))
 
@@ -164,7 +181,7 @@ merged = tf.summary.merge_all()
 
 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 with tf.control_dependencies(update_ops):
-    D_solver = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(D_loss, var_list=D_vars)
+    D_solver = tf.train.AdamOptimizer(learning_rate=1e-3).minimize(D_loss, var_list=D_vars)
     G_solver = tf.train.AdamOptimizer(learning_rate=5e-4).minimize(G_loss, var_list=G_vars)
 
 
@@ -191,6 +208,8 @@ def load_model_from_file(load_dir, sess):
         print('Could not load model from %s' % load_dir)
     return step
 
+if not os.path.exists(os.path.join(LoGdIr,'images')):
+    os.makedirs(os.path.join(LoGdIr,'images'))
 
 with tf.Session(config=config) as sess:
     model_file_name = os.path.join(LoGdIr, "model")
@@ -241,10 +260,12 @@ with tf.Session(config=config) as sess:
             X_mb, _ = mnist.test.next_batch(mb_size)
             X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-            _, D_loss_curr = sess.run(
-                [D_solver, D_loss],
+            _, D_loss_curr, D_fake_curr,D_real_curr = sess.run(
+                [D_solver, D_loss, D_fake,D_real],
                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
             )
+            print("d_fake",D_fake_curr)
+            print("d_real",D_real_curr)
             summary_G, _, G_loss_curr = sess.run(
                 [merged, G_solver, G_loss],
                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
