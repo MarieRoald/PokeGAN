@@ -35,7 +35,7 @@ def fc_layer(x, out_size, activation_function=lambda x: x, name=None):
         params['W'] = tf.get_variable(
             "W",
             [last_dim, out_size],
-            initializer=tf.glorot_normal_initializer()
+            initializer=tf.truncated_normal_initializer(stddev=0.02)
         )
 
         params['b'] = tf.get_variable(
@@ -46,6 +46,8 @@ def fc_layer(x, out_size, activation_function=lambda x: x, name=None):
 
         x = x if input_is_vector else tf.reshape(x, (-1, last_dim))
         out = tf.matmul(x, params['W']) + params['b']
+
+        variable_summaries(params['W'])
 
         return activation_function(out), params
 
@@ -58,7 +60,7 @@ def conv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size=3
         params['W'] = tf.get_variable(
             'W',
             [k_size, k_size, shape[-1], out_size],
-            initializer=tf.contrib.layers.xavier_initializer_conv2d()
+            initializer=tf.truncated_normal_initializer(stddev=0.02)
         )
 
         params['b'] = tf.get_variable(
@@ -79,7 +81,10 @@ def conv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size=3
         return activation_function(out), params
 
 
-def upconv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size=3, stride=1):
+def upconv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size=3, stride=1, batch_size=None):
+    if batch_size is None:
+        raise ValueError('Batch size must be specified.')
+
     with tf.name_scope(name):
         params = {'W': None, 'b': None}
         shape = x.get_shape().as_list()
@@ -87,7 +92,7 @@ def upconv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size
         params['W'] = tf.get_variable(
             'W',
             [k_size, k_size, out_size, shape[-1]],
-            initializer=tf.contrib.layers.xavier_initializer_conv2d()
+            initializer=tf.truncated_normal_initializer(stddev=0.02)
         )
 
         params['b'] = tf.get_variable(
@@ -95,17 +100,14 @@ def upconv_layer(x, out_size, activation_function=lambda x: x, name=None, k_size
             initializer=tf.zeros([out_size])  # TODO: FIX STUFF
         )
 
-        out = params['b'] + tf.nn.conv2d_backprop_input(
-            input_sizes=x.get_shape(),
+        out = params['b'] + tf.nn.conv2d_transpose(
+            x,
             filter=params['W'],
-            out_backprop=x,
+            output_shape=[batch_size, stride*shape[1], stride*shape[2], out_size],
             strides=(1, stride, stride, 1),
             padding='SAME'
         )
-        print(shape[-1])
-
         variable_summaries(params['W'])
-        # variable_summaries(params['b'])
 
         return activation_function(out), params
 
@@ -166,6 +168,7 @@ def create_nn(in_var, layers, is_training, reuse_vars=None, name=None):
                     x=out,
                     **layer['kwargs']
                 )
+                print(out.get_shape().as_list())
 
                 if layer['use_batchnorm']:
                     out = tf.contrib.layers.batch_norm(out, is_training=is_training)

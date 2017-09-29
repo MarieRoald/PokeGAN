@@ -15,6 +15,16 @@ LOAD_OLD = False
 LoGdIr = "tensorboard/large_net7"
 LOAD_DIR = LoGdIr
 
+if not os.path.exists(os.path.join(LoGdIr, 'images')):
+    os.makedirs(os.path.join(LoGdIr, 'images'))
+
+mb_size = 64
+Z_dim = 100
+
+W1_dim = 1024
+W2_dim = 128
+W3_dim = 64
+
 
 def layer_dict(layer_func, out_size, activation_function, name, use_batchnorm, kwargs=None):
     kwargs = {} if kwargs is None else kwargs
@@ -35,47 +45,53 @@ def generator(z, is_training):
     layers = [
         layer_dict(
             layer_func=nntools.fc_layer,
-            out_size=128,
+            out_size=W1_dim,
             activation_function=nntools.leaky_relu,
             name='fc1',
             use_batchnorm=True
         ),
         layer_dict(
             layer_func=nntools.fc_layer,
-            out_size=28*28*16,
+            out_size=7*7*W2_dim,
             activation_function=nntools.leaky_relu,
             name='fc2',
             use_batchnorm=True
         ),
         {
             'layer': nntools.reshape,
-            'kwargs': {'out_size': [-1, 28, 28, 16]},
+            'kwargs': {'out_size': [mb_size, 7, 7, W2_dim]},
             'use_batchnorm': None,
             'name': 'Reshape'
         },
         layer_dict(
-            layer_func=nntools.conv_layer,
-            out_size=16,
+            layer_func=nntools.upconv_layer,
+            out_size=W3_dim,
             activation_function=nntools.leaky_relu,
             name='conv1',
-            use_batchnorm=True
+            use_batchnorm=True,
+            kwargs={
+                'batch_size': mb_size,
+                'k_size': 5,
+                'stride': 2
+            }
         ),
         layer_dict(
-            layer_func=nntools.conv_layer,
-            out_size=32,
+            layer_func=nntools.upconv_layer,
+            out_size=1,
             activation_function=nntools.leaky_relu,
             name='conv2',
-            use_batchnorm=True
-        ),
-        layer_dict(
-            layer_func=nntools.conv_layer,
-            out_size=1,
-            activation_function=tf.nn.sigmoid,
-            name='conv3',
-            use_batchnorm=False
+            use_batchnorm=False,
+            kwargs={'batch_size': mb_size,
+                    'k_size': 5,
+                    'stride': 2}
         )
     ]
-    out, params = nntools.create_nn(z, layers, is_training=is_training, name='Generator')
+    out, params = nntools.create_nn(
+        z,
+        layers,
+        is_training=is_training,
+        name='Generator'
+    )
     return tf.reshape(out, [-1, 28, 28, 1]), params
 
 
@@ -83,38 +99,25 @@ def discriminator(z, is_training, reuse_vars=None):
     layers = [
         layer_dict(
             layer_func=nntools.conv_layer,
-            out_size=16,
+            out_size=W3_dim,
             activation_function=nntools.leaky_relu,
             name='conv1',
-            use_batchnorm=True
+            use_batchnorm=True,
+            kwargs={'k_size': 5,
+                    'stride': 2}
         ),
         layer_dict(
             layer_func=nntools.conv_layer,
-            out_size=32,
+            out_size=W2_dim,
             activation_function=nntools.leaky_relu,
             name='conv2',
             use_batchnorm=True,
-            kwargs={'stride': 1}
-        ),
-        layer_dict(
-            layer_func=nntools.conv_layer,
-            out_size=64,
-            activation_function=nntools.leaky_relu,
-            name='conv3',
-            use_batchnorm=True,
-            kwargs={'stride': 2}
-        ),
-        layer_dict(
-            layer_func=nntools.conv_layer,
-            out_size=64,
-            activation_function=nntools.leaky_relu,
-            name='conv4',
-            use_batchnorm=True,
-            kwargs={'stride': 2}
+            kwargs={'stride': 2,
+                    'k_size': 5}
         ),
         layer_dict(
             layer_func=nntools.fc_layer,
-            out_size=128,
+            out_size=W1_dim,
             activation_function=nntools.leaky_relu,
             name='fc1',
             use_batchnorm=True
@@ -127,7 +130,13 @@ def discriminator(z, is_training, reuse_vars=None):
             use_batchnorm=False
         )
     ]
-    out, params = nntools.create_nn(z, layers, is_training=is_training, name='Discriminator', reuse_vars=reuse_vars)
+    out, params = nntools.create_nn(
+        z,
+        layers,
+        is_training=is_training,
+        name='Discriminator',
+        reuse_vars=reuse_vars
+    )
     return out, params
 
 
@@ -145,7 +154,10 @@ def plot_batch(batch):
 
     for r in range(num_rows):
         for c in range(num_cols):
-            grid[r*img_width:r*img_width + img_width, c*img_height:c*img_height + img_height] = batch[r*num_rows + c]
+            grid[
+                r*img_width:r*img_width + img_width,
+                c*img_height:c*img_height + img_height
+            ] = batch[r*num_rows + c]
 
     plt.imshow(grid, interpolation='None', cmap='gray')
     plt.pause(1e-2)
@@ -153,26 +165,26 @@ def plot_batch(batch):
 
 is_training = tf.placeholder(tf.bool)
 with tf.variable_scope('G'):
-    Z = tf.placeholder(tf.float32, shape=[None, 100], name='Z')
+    Z = tf.placeholder(tf.float32, shape=[mb_size, Z_dim], name='Z')
     G_sample, G_vars = generator(Z, is_training=is_training)
 with tf.variable_scope('D') as scope:
-    X = tf.placeholder(tf.float32, shape=[None, 28, 28, 1], name='X')
+    X = tf.placeholder(tf.float32, shape=[mb_size, 28, 28, 1], name='X')
 
     D_real, D_vars = discriminator(X, reuse_vars=None, is_training=is_training)
     D_fake, D_fake_vars = discriminator(G_sample, reuse_vars=True, is_training=is_training)
 
 
-tf.summary.scalar('D_real',tf.reduce_mean(D_real))
-tf.summary.scalar('D_fake',tf.reduce_mean(D_fake))
-
-fake_acc = tf.reduce_mean(tf.cast(tf.less(D_fake,0.5),tf.float32))
-real_acc = tf.reduce_mean(tf.cast(tf.less(-D_real,-0.5),tf.float32))
-
-tf.summary.scalar('fake acc',fake_acc)
-tf.summary.scalar('real acc',real_acc)
+fake_acc = tf.reduce_mean(tf.cast(tf.less(D_fake, 0.5), tf.float32))
+real_acc = tf.reduce_mean(tf.cast(tf.less(-D_real, -0.5), tf.float32))
 
 D_loss = -tf.reduce_mean(tf.log(D_real) + tf.log(1. - D_fake))  # TODO: somethigg
 G_loss = -tf.reduce_mean(tf.log(D_fake))
+
+tf.summary.scalar('Fake acc', fake_acc)
+tf.summary.scalar('Real acc', real_acc)
+
+tf.summary.scalar('D_real', tf.reduce_mean(D_real))
+tf.summary.scalar('D_fake', tf.reduce_mean(D_fake))
 
 tf.summary.scalar('G_loss', G_loss)
 tf.summary.scalar('D_loss', D_loss)
@@ -181,12 +193,9 @@ merged = tf.summary.merge_all()
 
 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 with tf.control_dependencies(update_ops):
-    D_solver = tf.train.AdamOptimizer(learning_rate=1e-3).minimize(D_loss, var_list=D_vars)
-    G_solver = tf.train.AdamOptimizer(learning_rate=5e-4).minimize(G_loss, var_list=G_vars)
+    D_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(D_loss, var_list=D_vars)
+    G_solver = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(G_loss, var_list=G_vars)
 
-
-mb_size = 128
-Z_dim = 100
 
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
@@ -208,8 +217,6 @@ def load_model_from_file(load_dir, sess):
         print('Could not load model from %s' % load_dir)
     return step
 
-if not os.path.exists(os.path.join(LoGdIr,'images')):
-    os.makedirs(os.path.join(LoGdIr,'images'))
 
 with tf.Session(config=config) as sess:
     model_file_name = os.path.join(LoGdIr, "model")
@@ -260,12 +267,12 @@ with tf.Session(config=config) as sess:
             X_mb, _ = mnist.test.next_batch(mb_size)
             X_mb = np.reshape(X_mb, [-1, 28, 28, 1])
 
-            _, D_loss_curr, D_fake_curr,D_real_curr = sess.run(
-                [D_solver, D_loss, D_fake,D_real],
+            _, D_loss_curr, D_fake_curr, D_real_curr = sess.run(
+                [D_solver, D_loss, D_fake, D_real],
                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
             )
-            print("d_fake",D_fake_curr)
-            print("d_real",D_real_curr)
+            print("d_fake", D_fake_curr)
+            print("d_real", D_real_curr)
             summary_G, _, G_loss_curr = sess.run(
                 [merged, G_solver, G_loss],
                 feed_dict={X: X_mb, Z: sample_Z(mb_size, Z_dim), is_training: True}
@@ -274,5 +281,6 @@ with tf.Session(config=config) as sess:
             test_writer.add_summary(summary_G, it)
             test_writer.flush()
 
-            saver.save(sess, model_file_name, it)
+            if it % 5000 == 0:
+                saver.save(sess, model_file_name, it)
     plt.show()
