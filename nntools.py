@@ -118,7 +118,6 @@ def reshape(x, out_size, **kwargs):
 
 def create_nn(in_var, layers, is_training, reuse_vars=None, name=None):
     """A function that creates a custom neural network.
-
     Parameters:
     -----------
     in_var : tf.Variable
@@ -146,7 +145,6 @@ def create_nn(in_var, layers, is_training, reuse_vars=None, name=None):
         This should be true when the network is training and false otherwise.
     name : str
         The name scope of the network
-
     Returns:
     --------
     out : tf.Variable
